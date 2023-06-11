@@ -17,13 +17,13 @@
 from __future__ import annotations
 
 import re
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pendulum
 import pytest
-from kubernetes.client import ApiClient, models as k8s
+from kubernetes.client import ApiClient, V1PodStatus, models as k8s
 from pytest import param
 from urllib3 import HTTPResponse
 from urllib3.packages.six import BytesIO
@@ -32,11 +32,10 @@ from airflow.exceptions import AirflowException, AirflowSkipException, TaskDefer
 from airflow.kubernetes.secret import Secret
 from airflow.models import DAG, DagModel, DagRun, TaskInstance
 from airflow.models.xcom import XCom
-from airflow.providers.cncf.kubernetes.operators.pod import (
-    KubernetesPodOperator,
-    _optionally_suppress,
-)
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator, _optionally_suppress
 from airflow.providers.cncf.kubernetes.triggers.pod import KubernetesPodTrigger
+from airflow.providers.cncf.kubernetes.utils.pod_manager import PodPhase
+from airflow.providers.cncf.kubernetes.utils.xcom_sidecar import PodDefaults
 from airflow.utils import timezone
 from airflow.utils.session import create_session
 from airflow.utils.types import DagRunType
@@ -57,6 +56,14 @@ TEST_ARGS = ["echo", "10", "echo pwd"]
 TEST_LABELS = {"foo": "bar"}
 TEST_NAME = "test-pod"
 TEST_SUCCESS_MESSAGE = "All containers inside pod have started successfully."
+
+
+@contextmanager
+def temp_override_attr(obj, attr, val):
+    orig = getattr(obj, attr)
+    setattr(obj, attr, val)
+    yield
+    setattr(obj, attr, orig)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -165,7 +172,7 @@ class TestKubernetesPodOperator:
         remote_pod_mock.status.phase = "Succeeded"
         self.await_pod_mock.return_value = remote_pod_mock
         operator.execute(context=context)
-        return self.await_start_mock.call_args[1]["pod"]
+        return self.await_start_mock.call_args.kwargs["pod"]
 
     def sanitize_for_serialization(self, obj):
         return ApiClient().sanitize_for_serialization(obj)
@@ -323,6 +330,41 @@ class TestKubernetesPodOperator:
             "dag_id=dag,kubernetes_pod_operator=True,run_id=test,task_id=task,"
             "already_checked!=True,!airflow-worker"
         )
+
+    @patch(HOOK_CLASS, new=MagicMock)
+    def test_pod_dns_options(self):
+        dns_config = k8s.V1PodDNSConfig(
+            nameservers=["192.0.2.1", "192.0.2.3"],
+            searches=["ns1.svc.cluster-domain.example", "my.dns.search.suffix"],
+            options=[
+                k8s.V1PodDNSConfigOption(
+                    name="ndots",
+                    value="2",
+                )
+            ],
+        )
+        hostname = "busybox-2"
+        subdomain = "busybox-subdomain"
+
+        k = KubernetesPodOperator(
+            namespace="default",
+            image="ubuntu:16.04",
+            cmds=["bash", "-cx"],
+            labels={"foo": "bar"},
+            name="test",
+            task_id="task",
+            in_cluster=False,
+            do_xcom_push=False,
+            dns_config=dns_config,
+            hostname=hostname,
+            subdomain=subdomain,
+        )
+
+        self.run_pod(k)
+        pod_spec = k.pod.spec
+        assert pod_spec.dns_config == dns_config
+        assert pod_spec.subdomain == subdomain
+        assert pod_spec.hostname == hostname
 
     @pytest.mark.parametrize(
         "val",
@@ -491,9 +533,18 @@ class TestKubernetesPodOperator:
         )
         mock_find.assert_called_once_with("default", context=context)
 
-    @patch(HOOK_CLASS)
-    def test_xcom_sidecar_container_image_default(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_image.return_value = None
+    def test_xcom_sidecar_container_image_custom(self):
+        image = "private.repo/alpine:3.13"
+        with temp_override_attr(PodDefaults.SIDECAR_CONTAINER, "image", image):
+            k = KubernetesPodOperator(
+                name="test",
+                task_id="task",
+                do_xcom_push=True,
+            )
+            pod = k.build_pod_request_obj(create_context(k))
+        assert pod.spec.containers[1].image == image
+
+    def test_xcom_sidecar_container_image_default(self):
         k = KubernetesPodOperator(
             name="test",
             task_id="task",
@@ -502,20 +553,7 @@ class TestKubernetesPodOperator:
         pod = k.build_pod_request_obj(create_context(k))
         assert pod.spec.containers[1].image == "alpine"
 
-    @patch(HOOK_CLASS)
-    def test_xcom_sidecar_container_image_custom(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_image.return_value = "private.repo/alpine:3.13"
-        k = KubernetesPodOperator(
-            name="test",
-            task_id="task",
-            do_xcom_push=True,
-        )
-        pod = k.build_pod_request_obj(create_context(k))
-        assert pod.spec.containers[1].image == "private.repo/alpine:3.13"
-
-    @patch(HOOK_CLASS)
-    def test_xcom_sidecar_container_resources_default(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_resources.return_value = None
+    def test_xcom_sidecar_container_resources_default(self):
         k = KubernetesPodOperator(
             name="test",
             task_id="task",
@@ -529,22 +567,19 @@ class TestKubernetesPodOperator:
             },
         )
 
-    @patch(HOOK_CLASS)
-    def test_xcom_sidecar_container_resources_custom(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_resources.return_value = {
+    def test_xcom_sidecar_container_resources_custom(self):
+        resources = {
             "requests": {"cpu": "1m", "memory": "10Mi"},
             "limits": {"cpu": "10m", "memory": "50Mi"},
         }
-        k = KubernetesPodOperator(
-            name="test",
-            task_id="task",
-            do_xcom_push=True,
-        )
-        pod = k.build_pod_request_obj(create_context(k))
-        assert pod.spec.containers[1].resources == {
-            "requests": {"cpu": "1m", "memory": "10Mi"},
-            "limits": {"cpu": "10m", "memory": "50Mi"},
-        }
+        with temp_override_attr(PodDefaults.SIDECAR_CONTAINER, "resources", resources):
+            k = KubernetesPodOperator(
+                name="test",
+                task_id="task",
+                do_xcom_push=True,
+            )
+            pod = k.build_pod_request_obj(create_context(k))
+            assert pod.spec.containers[1].resources == resources
 
     def test_image_pull_policy_correctly_set(self):
         k = KubernetesPodOperator(
@@ -569,6 +604,7 @@ class TestKubernetesPodOperator:
         self.await_pod_mock.side_effect = AirflowException("fake failure")
         with pytest.raises(AirflowException, match="my-failure"):
             context = create_context(k)
+            context["ti"].xcom_push = MagicMock()
             k.execute(context=context)
         delete_pod_mock.assert_called_with(find_pod_mock.return_value)
 
@@ -1089,16 +1125,21 @@ class TestKubernetesPodOperator:
         "extra_kwargs, actual_exit_code, expected_exc",
         [
             (None, 99, AirflowException),
-            ({"skip_exit_code": 100}, 100, AirflowSkipException),
-            ({"skip_exit_code": 100}, 101, AirflowException),
-            ({"skip_exit_code": None}, 100, AirflowException),
+            ({"skip_on_exit_code": 100}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": 100}, 101, AirflowException),
+            ({"skip_on_exit_code": None}, 100, AirflowException),
+            ({"skip_on_exit_code": [100]}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": (100, 101)}, 100, AirflowSkipException),
+            ({"skip_on_exit_code": 100}, 101, AirflowException),
+            ({"skip_on_exit_code": [100, 102]}, 101, AirflowException),
+            ({"skip_on_exit_code": None}, 0, None),
         ],
     )
     @patch(f"{POD_MANAGER_CLASS}.await_pod_completion")
     def test_task_skip_when_pod_exit_with_certain_code(
         self, remote_pod, extra_kwargs, actual_exit_code, expected_exc
     ):
-        """Tests that an AirflowSkipException is raised when the container exits with the skip_exit_code"""
+        """Tests that an AirflowSkipException is raised when the container exits with the skip_on_exit_code"""
         k = KubernetesPodOperator(
             task_id="task", is_delete_operator_pod=True, **(extra_kwargs if extra_kwargs else {})
         )
@@ -1110,9 +1151,13 @@ class TestKubernetesPodOperator:
         sidecar_container.name = "airflow-xcom-sidecar"
         sidecar_container.last_state.terminated.exit_code = 0
         remote_pod.return_value.status.container_statuses = [base_container, sidecar_container]
+        remote_pod.return_value.status.phase = "Succeeded" if actual_exit_code == 0 else "Failed"
 
-        with pytest.raises(expected_exc):
+        if expected_exc is None:
             self.run_pod(k)
+        else:
+            with pytest.raises(expected_exc):
+                self.run_pod(k)
 
 
 class TestSuppress:
@@ -1221,10 +1266,9 @@ class TestKubernetesPodOperatorAsync:
         )
         return remote_pod_mock
 
-    @patch(KUB_OP_PATH.format("convert_config_file_to_dict"))
     @patch(KUB_OP_PATH.format("build_pod_request_obj"))
     @patch(KUB_OP_PATH.format("get_or_create_pod"))
-    def test_async_create_pod_should_execute_successfully(self, mocked_pod, mocked_pod_obj, mocked_conf_file):
+    def test_async_create_pod_should_execute_successfully(self, mocked_pod, mocked_pod_obj):
         """
         Asserts that a task is deferred and the KubernetesCreatePodTrigger will be fired
         when the KubernetesPodOperator is executed in deferrable mode when deferrable=True.
@@ -1284,13 +1328,13 @@ class TestKubernetesPodOperatorAsync:
         [
             (None, 0, None, "Succeeded", "success"),
             (None, 99, AirflowException, "Failed", "error"),
-            ({"skip_exit_code": 100}, 100, AirflowSkipException, "Failed", "error"),
-            ({"skip_exit_code": 100}, 101, AirflowException, "Failed", "error"),
-            ({"skip_exit_code": None}, 100, AirflowException, "Failed", "error"),
+            ({"skip_on_exit_code": 100}, 100, AirflowSkipException, "Failed", "error"),
+            ({"skip_on_exit_code": 100}, 101, AirflowException, "Failed", "error"),
+            ({"skip_on_exit_code": None}, 100, AirflowException, "Failed", "error"),
         ],
     )
     @patch(HOOK_CLASS)
-    def test_async_create_pod_with_skip_exit_code_should_skip(
+    def test_async_create_pod_with_skip_on_exit_code_should_skip(
         self,
         mocked_hook,
         extra_kwargs,
@@ -1299,7 +1343,7 @@ class TestKubernetesPodOperatorAsync:
         pod_status,
         event_status,
     ):
-        """Tests that an AirflowSkipException is raised when the container exits with the skip_exit_code"""
+        """Tests that an AirflowSkipException is raised when the container exits with the skip_on_exit_code"""
 
         k = KubernetesPodOperator(
             task_id=TEST_TASK_ID,
@@ -1378,9 +1422,7 @@ class TestKubernetesPodOperatorAsync:
         else:
             mocked_extract.assert_not_called()
 
-    @patch(HOOK_CLASS)
-    def test_async_xcom_sidecar_container_image_default_should_execute_successfully(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_image.return_value = None
+    def test_async_xcom_sidecar_container_image_default_should_execute_successfully(self):
         k = KubernetesPodOperator(
             name=TEST_NAME,
             task_id="task",
@@ -1390,9 +1432,7 @@ class TestKubernetesPodOperatorAsync:
         pod = k.build_pod_request_obj(create_context(k))
         assert pod.spec.containers[1].image == "alpine"
 
-    @patch(HOOK_CLASS)
-    def test_async_xcom_sidecar_container_resources_default_should_execute_successfully(self, hook_mock):
-        hook_mock.return_value.get_xcom_sidecar_container_resources.return_value = None
+    def test_async_xcom_sidecar_container_resources_default_should_execute_successfully(self):
         k = KubernetesPodOperator(
             name=TEST_NAME,
             task_id="task",
@@ -1498,3 +1538,17 @@ class TestKubernetesPodOperatorAsync:
             post_complete_action.assert_called_once()
         else:
             mock_manager.return_value.read_pod_logs.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "log_pod_spec_on_failure,expect_match",
+        [
+            (True, r"Pod task-.* returned a failure.\nremote_pod:.*"),
+            (False, r"Pod task-.* returned a failure.(?!\nremote_pod:)"),
+        ],
+    )
+    def test_cleanup_log_pod_spec_on_failure(self, log_pod_spec_on_failure, expect_match):
+        k = KubernetesPodOperator(task_id="task", log_pod_spec_on_failure=log_pod_spec_on_failure)
+        pod = k.build_pod_request_obj(create_context(k))
+        pod.status = V1PodStatus(phase=PodPhase.FAILED)
+        with pytest.raises(AirflowException, match=expect_match):
+            k.cleanup(pod, pod)

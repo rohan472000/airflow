@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import time
-import warnings
 from typing import Sequence
 
 import requests
@@ -46,16 +45,16 @@ class CloudFunctionsHook(GoogleBaseHook):
         self,
         api_version: str,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
-        if delegate_to:
-            warnings.warn(
-                "'delegate_to' parameter is deprecated, please use 'impersonation_chain'", DeprecationWarning
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
             )
         super().__init__(
             gcp_conn_id=gcp_conn_id,
-            delegate_to=delegate_to,
             impersonation_chain=impersonation_chain,
         )
         self.api_version = api_version
@@ -64,7 +63,7 @@ class CloudFunctionsHook(GoogleBaseHook):
     def _full_location(project_id: str, location: str) -> str:
         """
         Retrieve full location of the function in the form of
-        ``projects/<GCP_PROJECT_ID>/locations/<GCP_LOCATION>``
+        ``projects/<GCP_PROJECT_ID>/locations/<GCP_LOCATION>``.
 
         :param project_id: The Google Cloud Project project_id where the function belongs.
         :param location: The location where the function is created.

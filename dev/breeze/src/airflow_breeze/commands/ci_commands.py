@@ -40,13 +40,9 @@ from airflow_breeze.global_constants import (
 from airflow_breeze.params.shell_params import ShellParams
 from airflow_breeze.utils.click_utils import BreezeGroup
 from airflow_breeze.utils.common_options import (
-    option_airflow_constraints_reference,
     option_answer,
     option_dry_run,
-    option_max_age,
-    option_python,
-    option_timezone,
-    option_updated_on_or_after,
+    option_github_repository,
     option_verbose,
 )
 from airflow_breeze.utils.confirm import Answer, user_confirm
@@ -57,7 +53,6 @@ from airflow_breeze.utils.docker_command_utils import (
     fix_ownership_using_docker,
     perform_environment_checks,
 )
-from airflow_breeze.utils.find_newer_dependencies import find_newer_dependencies
 from airflow_breeze.utils.github_actions import get_ga_output
 from airflow_breeze.utils.path_utils import AIRFLOW_SOURCES_ROOT, MSSQL_TMP_DIR_NAME
 from airflow_breeze.utils.run_utils import run_command
@@ -226,6 +221,21 @@ def get_changed_files(commit_ref: str | None) -> tuple[str, ...]:
     envvar="GITHUB_EVENT_NAME",
     show_default=True,
 )
+@option_github_repository
+@click.option(
+    "--github-actor",
+    help="Actor that triggered the event (Github user)",
+    envvar="GITHUB_ACTOR",
+    type=str,
+    default="",
+)
+@click.option(
+    "--github-context",
+    help="Github context (JSON formatted) passed by Github Actions",
+    envvar="GITHUB_CONTEXT",
+    type=str,
+    default="",
+)
 @option_verbose
 @option_dry_run
 def selective_check(
@@ -234,9 +244,13 @@ def selective_check(
     default_branch: str,
     default_constraints_branch: str,
     github_event_name: str,
+    github_repository: str,
+    github_actor: str,
+    github_context: str,
 ):
     from airflow_breeze.utils.selective_checks import SelectiveChecks
 
+    github_context_dict = json.loads(github_context) if github_context else {}
     github_event = GithubEvents(github_event_name)
     if commit_ref is not None:
         changed_files = get_changed_files(commit_ref=commit_ref)
@@ -249,26 +263,11 @@ def selective_check(
         default_constraints_branch=default_constraints_branch,
         pr_labels=tuple(ast.literal_eval(pr_labels)) if pr_labels else (),
         github_event=github_event,
+        github_repository=github_repository,
+        github_actor=github_actor,
+        github_context_dict=github_context_dict,
     )
     print(str(sc), file=sys.stderr)
-
-
-@ci_group.command(name="find-newer-dependencies", help="Finds which dependencies are being upgraded.")
-@option_timezone
-@option_airflow_constraints_reference
-@option_python
-@option_updated_on_or_after
-@option_max_age
-def breeze_find_newer_dependencies(
-    airflow_constraints_reference: str, python: str, timezone: str, updated_on_or_after: str, max_age: int
-):
-    return find_newer_dependencies(
-        constraints_branch=airflow_constraints_reference,
-        python=python,
-        timezone=timezone,
-        updated_on_or_after=updated_on_or_after,
-        max_age=max_age,
-    )
 
 
 TEST_BRANCH_MATCHER = re.compile(r"^v.*test$")
@@ -309,7 +308,7 @@ class WorkflowInfo(NamedTuple):
         return RUNS_ON_SELF_HOSTED_RUNNER
 
     def in_workflow_build(self) -> str:
-        if self.event_name == "push" or self.head_repo == "apache/airflow":
+        if self.event_name == "push" or self.head_repo == self.target_repo:
             return "true"
         return "false"
 

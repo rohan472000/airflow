@@ -18,7 +18,6 @@
 """This module contains a Google Cloud Vertex AI hook."""
 from __future__ import annotations
 
-import warnings
 from typing import Sequence
 
 from google.api_core.client_options import ClientOptions
@@ -51,16 +50,16 @@ class CustomJobHook(GoogleBaseHook):
     def __init__(
         self,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
-        if delegate_to:
-            warnings.warn(
-                "'delegate_to' parameter is deprecated, please use 'impersonation_chain'", DeprecationWarning
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
             )
         super().__init__(
             gcp_conn_id=gcp_conn_id,
-            delegate_to=delegate_to,
             impersonation_chain=impersonation_chain,
         )
         self._job: None | (
@@ -84,7 +83,7 @@ class CustomJobHook(GoogleBaseHook):
         self,
         region: str | None = None,
     ) -> JobServiceClient:
-        """Returns JobServiceClient"""
+        """Returns JobServiceClient."""
         if region and region != "global":
             client_options = ClientOptions(api_endpoint=f"{region}-aiplatform.googleapis.com:443")
         else:
@@ -117,7 +116,7 @@ class CustomJobHook(GoogleBaseHook):
         model_encryption_spec_key_name: str | None = None,
         staging_bucket: str | None = None,
     ) -> CustomContainerTrainingJob:
-        """Returns CustomContainerTrainingJob object"""
+        """Returns CustomContainerTrainingJob object."""
         return CustomContainerTrainingJob(
             display_name=display_name,
             container_uri=container_uri,
@@ -166,7 +165,7 @@ class CustomJobHook(GoogleBaseHook):
         model_encryption_spec_key_name: str | None = None,
         staging_bucket: str | None = None,
     ):
-        """Returns CustomPythonPackageTrainingJob object"""
+        """Returns CustomPythonPackageTrainingJob object."""
         return CustomPythonPackageTrainingJob(
             display_name=display_name,
             container_uri=container_uri,
@@ -216,7 +215,7 @@ class CustomJobHook(GoogleBaseHook):
         model_encryption_spec_key_name: str | None = None,
         staging_bucket: str | None = None,
     ):
-        """Returns CustomTrainingJob object"""
+        """Returns CustomTrainingJob object."""
         return CustomTrainingJob(
             display_name=display_name,
             script_path=script_path,
@@ -266,7 +265,7 @@ class CustomJobHook(GoogleBaseHook):
             raise AirflowException(error)
 
     def cancel_job(self) -> None:
-        """Cancel Job for training pipeline"""
+        """Cancel Job for training pipeline."""
         if self._job:
             self._job.cancel()
 
@@ -303,7 +302,7 @@ class CustomJobHook(GoogleBaseHook):
         tensorboard: str | None = None,
         sync=True,
     ) -> tuple[models.Model | None, str, str]:
-        """Run Job for training pipeline"""
+        """Run Job for training pipeline."""
         model = job.run(
             dataset=dataset,
             annotation_schema_uri=annotation_schema_uri,
@@ -628,7 +627,7 @@ class CustomJobHook(GoogleBaseHook):
         sync=True,
     ) -> tuple[models.Model | None, str, str]:
         """
-        Create Custom Container Training Job
+        Create Custom Container Training Job.
 
         :param display_name: Required. The user-defined name of this TrainingPipeline.
         :param command: The command to be invoked when the container is started.
@@ -986,7 +985,7 @@ class CustomJobHook(GoogleBaseHook):
         sync=True,
     ) -> tuple[models.Model | None, str, str]:
         """
-        Create Custom Python Package Training Job
+        Create Custom Python Package Training Job.
 
         :param display_name: Required. The user-defined name of this TrainingPipeline.
         :param python_package_gcs_uri: Required: GCS location of the training python package.
@@ -1344,7 +1343,7 @@ class CustomJobHook(GoogleBaseHook):
         sync=True,
     ) -> tuple[models.Model | None, str, str]:
         """
-        Create Custom Training Job
+        Create Custom Training Job.
 
         :param display_name: Required. The user-defined name of this TrainingPipeline.
         :param script_path: Required. Local path to training script.

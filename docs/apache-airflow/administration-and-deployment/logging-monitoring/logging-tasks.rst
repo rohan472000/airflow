@@ -57,34 +57,30 @@ In addition, you can supply a remote location to store current logs and backups.
 Writing to task logs from your code
 -----------------------------------
 
-Most operators will write logs to the task log automatically. This is because they derive from they
+Airflow uses standard the Python `logging <https://docs.python.org/3/library/logging.html>`_ framework to
+write logs, and for the duration of a task, the root logger is configured to write to the task's log.
+
+Most operators will write logs to the task log automatically. This is because they
 have a ``log`` logger that you can use to write to the task log.
-This logger is created and configured by :class:`~airflow.utils.log.LoggingMixin` that all classic
-operators derive from.
+This logger is created and configured by :class:`~airflow.utils.log.LoggingMixin` that all
+operators derive from. But also due to the root logger handling, any standard logger (using default settings) that
+propagates logging to the root will also write to the task log.
 
-If you want to log to the task log from a custom class of yours you can do the following:
+So if you want to log to the task log from custom code of yours you can do any of the following:
 
-* make sure your class extends from :class:`~airflow.utils.log.LoggingMixin`
-* just use standard print statements to print to stdout
-* use the ``airflow.task`` logger that is configured by default or create logger where ``airflow.task`` is
-  the parent logger
+* Log with the ``self.log`` logger from BaseOperator
+* Use standard ``print`` statements to print to ``stdout`` (not recommended, but in some cases it can be useful)
+* Use the standard logger approach of creating a logger using the Python module name
+  and using it to write to the task log
 
-The last option is the most flexible, as you can create your own logger and configure it as you see fit
-via advanced configuration options below.
-
-Using task logger directly:
+This is the usual way loggers are used directly in Python code:
 
 .. code-block:: python
 
-  logger = logging.getLogger("airflow.task")
+  import logging
+
+  logger = logging.getLogger(__name__)
   logger.info("This is a log message")
-
-Using child logger of task logger:
-
-.. code-block:: python
-
-  child_logger = logging.getLogger("airflow.task.child")
-  child_logger.info("This is a child log message")
 
 
 Interleaving of logs
@@ -105,16 +101,20 @@ the example below.
 .. code-block:: bash
 
     $ airflow info
-    ...
-    airflow on PATH: [True]
 
-    Executor: [SequentialExecutor]
-    Task Logging Handlers: [StackdriverTaskHandler]
-    SQL Alchemy Conn: [sqlite://///root/airflow/airflow.db]
-    DAGs Folder: [/root/airflow/dags]
-    Plugins Folder: [/root/airflow/plugins]
-    Base Log Folder: [/root/airflow/logs]
+    Apache Airflow
+    version                | 2.7.0.dev0
+    executor               | LocalExecutor
+    task_logging_handler   | airflow.utils.log.file_task_handler.FileTaskHandler
+    sql_alchemy_conn       | postgresql+psycopg2://postgres:airflow@postgres/airflow
+    dags_folder            | /files/dags
+    plugins_folder         | /root/airflow/plugins
+    base_log_folder        | /root/airflow/logs
+    remote_base_log_folder |
 
+    [skipping the remaining outputs for brevity]
+
+The output of ``airflow info`` above is truncated to only display the section that pertains to the logging configuration.
 You can also run ``airflow config list`` to check that the logging configuration options have valid values.
 
 .. _write-logs-advanced:
@@ -164,6 +164,8 @@ External Links
 When using remote logging, you can configure Airflow to show a link to an external UI within the Airflow Web UI. Clicking the link redirects you to the external UI.
 
 Some external systems require specific configuration in Airflow for redirection to work but others do not.
+
+.. _serving-worker-trigger-logs:
 
 Serving logs from workers and triggerer
 ---------------------------------------

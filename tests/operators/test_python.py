@@ -31,7 +31,8 @@ from unittest import mock
 import pytest
 from slugify import slugify
 
-from airflow.exceptions import AirflowException, RemovedInAirflow3Warning
+from airflow.decorators import task_group
+from airflow.exceptions import AirflowException, DeserializingResultError, RemovedInAirflow3Warning
 from airflow.models import DAG, DagRun, TaskInstance as TI
 from airflow.models.baseoperator import BaseOperator
 from airflow.models.taskinstance import clear_task_instances, set_current_context
@@ -279,6 +280,20 @@ class TestPythonOperator(BasePythonTest):
         else:
             assert "Done. Returned value was: test_return_value" not in caplog.messages
             assert "Done. Returned value not shown" in caplog.messages
+
+    def test_python_operator_templates_exts(self):
+        def func():
+            return "test_return_value"
+
+        python_operator = PythonOperator(
+            task_id="python_operator",
+            python_callable=func,
+            dag=self.dag,
+            show_return_value_in_logs=False,
+            templates_exts=["test_ext"],
+        )
+
+        assert python_operator.template_ext == ["test_ext"]
 
 
 class TestBranchOperator(BasePythonTest):
@@ -604,6 +619,53 @@ class TestShortCircuitOperator(BasePythonTest):
         assert tis[0].xcom_pull(task_ids=short_op_push_xcom.task_id, key="return_value") == "signature"
         assert tis[0].xcom_pull(task_ids=short_op_no_push_xcom.task_id, key="return_value") is None
 
+    def test_xcom_push_skipped_tasks(self):
+        with self.dag:
+            short_op_push_xcom = ShortCircuitOperator(
+                task_id="push_xcom_from_shortcircuit", python_callable=lambda: False
+            )
+            empty_task = EmptyOperator(task_id="empty_task")
+            short_op_push_xcom >> empty_task
+        dr = self.create_dag_run()
+        short_op_push_xcom.run(start_date=self.default_date, end_date=self.default_date)
+        tis = dr.get_task_instances()
+        assert tis[0].xcom_pull(task_ids=short_op_push_xcom.task_id, key="skipmixin_key") == {
+            "skipped": ["empty_task"]
+        }
+
+    def test_mapped_xcom_push_skipped_tasks(self, session):
+        with self.dag:
+
+            @task_group
+            def group(x):
+                short_op_push_xcom = ShortCircuitOperator(
+                    task_id="push_xcom_from_shortcircuit",
+                    python_callable=lambda arg: arg % 2 == 0,
+                    op_kwargs={"arg": x},
+                )
+                empty_task = EmptyOperator(task_id="empty_task")
+                short_op_push_xcom >> empty_task
+
+            group.expand(x=[0, 1])
+        dr = self.create_dag_run()
+        decision = dr.task_instance_scheduling_decisions(session=session)
+        for ti in decision.schedulable_tis:
+            ti.run()
+        # dr.run(start_date=self.default_date, end_date=self.default_date)
+        tis = dr.get_task_instances()
+
+        assert (
+            tis[0].xcom_pull(task_ids="group.push_xcom_from_shortcircuit", key="return_value", map_indexes=0)
+            is True
+        )
+        assert (
+            tis[0].xcom_pull(task_ids="group.push_xcom_from_shortcircuit", key="skipmixin_key", map_indexes=0)
+            is None
+        )
+        assert tis[0].xcom_pull(
+            task_ids="group.push_xcom_from_shortcircuit", key="skipmixin_key", map_indexes=1
+        ) == {"skipped": ["group.empty_task"]}
+
 
 virtualenv_string_args: list[str] = []
 
@@ -618,6 +680,14 @@ class BaseTestPythonVirtualenvOperator(BasePythonTest):
 
         with pytest.raises(CalledProcessError):
             self.run_as_task(f)
+
+    def test_fail_with_message(self):
+        def f():
+            raise Exception("Custom error message")
+
+        with pytest.raises(AirflowException) as e:
+            self.run_as_task(f)
+            assert "Custom error message" in str(e)
 
     def test_string_args(self):
         def f():
@@ -976,6 +1046,21 @@ class TestExternalPythonOperator(BaseTestPythonVirtualenvOperator):
     def default_kwargs(*, python_version=sys.version_info[0], **kwargs):
         kwargs["python"] = sys.executable
         return kwargs
+
+    @mock.patch("pickle.loads")
+    def test_except_value_error(self, loads_mock):
+        def f():
+            return 1
+
+        task = PythonVirtualenvOperator(
+            python_callable=f,
+            task_id="task",
+            dag=self.dag,
+        )
+
+        loads_mock.side_effect = DeserializingResultError
+        with pytest.raises(DeserializingResultError):
+            task._read_result(path=mock.Mock())
 
 
 class TestCurrentContext:

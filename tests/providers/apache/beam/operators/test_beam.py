@@ -118,7 +118,6 @@ class TestBeamRunPythonPipelineOperator:
         job_name = dataflow_hook_mock.build_dataflow_job_name.return_value
         dataflow_hook_mock.assert_called_once_with(
             gcp_conn_id=dataflow_config.gcp_conn_id,
-            delegate_to=dataflow_config.delegate_to,
             poll_sleep=dataflow_config.poll_sleep,
             impersonation_chain=dataflow_config.impersonation_chain,
             drain_pipeline=dataflow_config.drain_pipeline,
@@ -239,7 +238,6 @@ class TestBeamRunJavaPipelineOperator:
         job_name = dataflow_hook_mock.build_dataflow_job_name.return_value
         dataflow_hook_mock.assert_called_once_with(
             gcp_conn_id=dataflow_config.gcp_conn_id,
-            delegate_to=dataflow_config.delegate_to,
             poll_sleep=dataflow_config.poll_sleep,
             impersonation_chain=dataflow_config.impersonation_chain,
             drain_pipeline=dataflow_config.drain_pipeline,
@@ -428,7 +426,7 @@ class TestBeamRunGoPipelineOperator:
         """
 
         def tmp_dir_side_effect(prefix: str) -> str:
-            sub_dir = tmp_path / mock_tmp_dir.call_args[1]["prefix"]
+            sub_dir = tmp_path / mock_tmp_dir.call_args.kwargs["prefix"]
             sub_dir.mkdir()
             return str(sub_dir)
 
@@ -539,7 +537,6 @@ class TestBeamRunGoPipelineOperator:
         job_name = dataflow_hook_mock.build_dataflow_job_name.return_value
         dataflow_hook_mock.assert_called_once_with(
             gcp_conn_id=dataflow_config.gcp_conn_id,
-            delegate_to=dataflow_config.delegate_to,
             poll_sleep=dataflow_config.poll_sleep,
             impersonation_chain=dataflow_config.impersonation_chain,
             drain_pipeline=dataflow_config.drain_pipeline,
@@ -594,7 +591,7 @@ class TestBeamRunGoPipelineOperator:
         """
 
         def tmp_dir_side_effect(prefix: str) -> str:
-            sub_dir = tmp_path / mock_tmp_dir.call_args[1]["prefix"]
+            sub_dir = tmp_path / mock_tmp_dir.call_args.kwargs["prefix"]
             sub_dir.mkdir()
             return str(sub_dir)
 
@@ -649,7 +646,6 @@ class TestBeamRunGoPipelineOperator:
 
         mock_dataflow_hook.assert_called_once_with(
             gcp_conn_id=dataflow_config.gcp_conn_id,
-            delegate_to=dataflow_config.delegate_to,
             poll_sleep=dataflow_config.poll_sleep,
             impersonation_chain=dataflow_config.impersonation_chain,
             drain_pipeline=dataflow_config.drain_pipeline,

@@ -19,15 +19,14 @@
 from __future__ import annotations
 
 import abc
+import csv
 import json
 import os
-import warnings
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import unicodecsv as csv
 
 from airflow.models import BaseOperator
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
@@ -65,9 +64,6 @@ class BaseSQLToGCSOperator(BaseOperator):
         dict. Examples could be seen: https://cloud.google.com/bigquery/docs
         /schemas#specifying_a_json_schema_file
     :param gcp_conn_id: (Optional) The connection ID used to connect to Google Cloud.
-    :param delegate_to: The account to impersonate using domain-wide delegation of authority,
-        if any. For this to work, the service account making the request must have
-        domain-wide delegation enabled.
     :param parameters: a parameters dict that is substituted at query runtime.
     :param impersonation_chain: Optional service account to impersonate using short-term
         credentials, or chained list of accounts required to get the access_token
@@ -118,7 +114,6 @@ class BaseSQLToGCSOperator(BaseOperator):
         schema: str | list | None = None,
         parameters: dict | None = None,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         upload_metadata: bool = False,
         exclude_columns: set | None = None,
@@ -143,11 +138,6 @@ class BaseSQLToGCSOperator(BaseOperator):
         self.schema = schema
         self.parameters = parameters
         self.gcp_conn_id = gcp_conn_id
-        if delegate_to:
-            warnings.warn(
-                "'delegate_to' parameter is deprecated, please use 'impersonation_chain'", DeprecationWarning
-            )
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.upload_metadata = upload_metadata
         self.exclude_columns = exclude_columns
@@ -296,12 +286,10 @@ class BaseSQLToGCSOperator(BaseOperator):
                 row = self.convert_types(schema, col_type_dict, row)
                 row_dict = dict(zip(schema, row))
 
-                tmp_file_handle.write(
-                    json.dumps(row_dict, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                )
+                json.dump(row_dict, tmp_file_handle, sort_keys=True, ensure_ascii=False)
 
                 # Append newline to make dumps BigQuery compatible.
-                tmp_file_handle.write(b"\n")
+                tmp_file_handle.write("\n")
 
             # Stop if the file exceeds the file size limit.
             fppos = tmp_file_handle.tell()
@@ -332,8 +320,8 @@ class BaseSQLToGCSOperator(BaseOperator):
             yield file_to_upload
 
     def _get_file_to_upload(self, file_mime_type, file_no):
-        """Returns a dictionary that represents the file to upload"""
-        tmp_file_handle = NamedTemporaryFile(delete=True)
+        """Returns a dictionary that represents the file to upload."""
+        tmp_file_handle = NamedTemporaryFile(mode="w", encoding="utf-8", delete=True)
         return (
             {
                 "file_name": self.filename.format(file_no),
@@ -357,7 +345,7 @@ class BaseSQLToGCSOperator(BaseOperator):
         """Configure a csv writer with the file_handle and write schema
         as headers for the new file.
         """
-        csv_writer = csv.writer(file_handle, encoding="utf-8", delimiter=self.field_delimiter)
+        csv_writer = csv.writer(file_handle, delimiter=self.field_delimiter)
         csv_writer.writerow(schema)
         return csv_writer
 
@@ -446,8 +434,8 @@ class BaseSQLToGCSOperator(BaseOperator):
         self.log.info("Using schema for %s", self.schema_filename)
         self.log.debug("Current schema: %s", schema)
 
-        tmp_schema_file_handle = NamedTemporaryFile(delete=True)
-        tmp_schema_file_handle.write(schema.encode("utf-8"))
+        tmp_schema_file_handle = NamedTemporaryFile(mode="w", encoding="utf-8", delete=True)
+        tmp_schema_file_handle.write(schema)
         schema_file_to_upload = {
             "file_name": self.schema_filename,
             "file_handle": tmp_schema_file_handle,
@@ -459,7 +447,6 @@ class BaseSQLToGCSOperator(BaseOperator):
         """Upload a file (data split or schema .json file) to Google Cloud Storage."""
         hook = GCSHook(
             gcp_conn_id=self.gcp_conn_id,
-            delegate_to=self.delegate_to,
             impersonation_chain=self.impersonation_chain,
         )
         is_data_file = file_to_upload.get("file_name") != self.schema_filename

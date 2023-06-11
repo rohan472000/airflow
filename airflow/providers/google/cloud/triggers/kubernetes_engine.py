@@ -129,7 +129,6 @@ class GKEOperationTrigger(BaseTrigger):
         project_id: str | None,
         location: str,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
         poll_interval: int = 10,
     ):
@@ -139,7 +138,6 @@ class GKEOperationTrigger(BaseTrigger):
         self.project_id = project_id
         self.location = location
         self.gcp_conn_id = gcp_conn_id
-        self.delegate_to = delegate_to
         self.impersonation_chain = impersonation_chain
         self.poll_interval = poll_interval
 
@@ -154,13 +152,12 @@ class GKEOperationTrigger(BaseTrigger):
                 "project_id": self.project_id,
                 "location": self.location,
                 "gcp_conn_id": self.gcp_conn_id,
-                "delegate_to": self.delegate_to,
                 "impersonation_chain": self.impersonation_chain,
                 "poll_interval": self.poll_interval,
             },
         )
 
-    async def run(self) -> AsyncIterator["TriggerEvent"]:  # type: ignore[override]
+    async def run(self) -> AsyncIterator[TriggerEvent]:  # type: ignore[override]
         """Gets operation status and yields corresponding event."""
         hook = self._get_hook()
         while True:
@@ -179,7 +176,6 @@ class GKEOperationTrigger(BaseTrigger):
                             "operation_name": operation.name,
                         }
                     )
-                    return
 
                 elif status == Operation.Status.RUNNING or status == Operation.Status.PENDING:
                     self.log.info("Operation is still running.")
@@ -193,7 +189,6 @@ class GKEOperationTrigger(BaseTrigger):
                             "message": f"Operation has failed with status: {operation.status}",
                         }
                     )
-                    return
             except Exception as e:
                 self.log.exception("Exception occurred while checking operation status")
                 yield TriggerEvent(
@@ -202,14 +197,12 @@ class GKEOperationTrigger(BaseTrigger):
                         "message": str(e),
                     }
                 )
-                return
 
     def _get_hook(self) -> GKEAsyncHook:
         if self._hook is None:
             self._hook = GKEAsyncHook(
                 gcp_conn_id=self.gcp_conn_id,
                 location=self.location,
-                delegate_to=self.delegate_to,
                 impersonation_chain=self.impersonation_chain,
             )
         return self._hook

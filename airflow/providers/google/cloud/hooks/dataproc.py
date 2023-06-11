@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import time
 import uuid
-import warnings
 from typing import Any, Sequence
 
 from google.api_core.client_options import ClientOptions
@@ -209,14 +208,15 @@ class DataprocHook(GoogleBaseHook):
     def __init__(
         self,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
-        if delegate_to:
-            warnings.warn(
-                "'delegate_to' parameter is deprecated, please use 'impersonation_chain'", DeprecationWarning
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
             )
-        super().__init__(gcp_conn_id, delegate_to, impersonation_chain)
+        super().__init__(gcp_conn_id=gcp_conn_id, impersonation_chain=impersonation_chain)
 
     def get_cluster_client(self, region: str | None = None) -> ClusterControllerClient:
         """Returns ClusterControllerClient."""
@@ -249,7 +249,7 @@ class DataprocHook(GoogleBaseHook):
         )
 
     def get_batch_client(self, region: str | None = None) -> BatchControllerClient:
-        """Returns BatchControllerClient"""
+        """Returns BatchControllerClient."""
         client_options = None
         if region and region != "global":
             client_options = ClientOptions(api_endpoint=f"{region}-dataproc.googleapis.com:443")
@@ -259,7 +259,7 @@ class DataprocHook(GoogleBaseHook):
         )
 
     def get_operations_client(self, region):
-        """Returns OperationsClient"""
+        """Returns OperationsClient."""
         return self.get_batch_client(region=region).transport.operations_client
 
     def wait_for_operation(
@@ -398,7 +398,7 @@ class DataprocHook(GoogleBaseHook):
     ):
         """
         Gets cluster diagnostic information. After the operation completes GCS uri to
-        diagnose is returned
+        diagnose is returned.
 
         :param project_id: Required. The ID of the Google Cloud project that the cluster belongs to.
         :param region: Required. The Cloud Dataproc region in which to handle the request.
@@ -1060,10 +1060,15 @@ class DataprocAsyncHook(GoogleBaseHook):
     def __init__(
         self,
         gcp_conn_id: str = "google_cloud_default",
-        delegate_to: str | None = None,
         impersonation_chain: str | Sequence[str] | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(gcp_conn_id, delegate_to, impersonation_chain)
+        if kwargs.get("delegate_to") is not None:
+            raise RuntimeError(
+                "The `delegate_to` parameter has been deprecated before and finally removed in this version"
+                " of Google Provider. You MUST convert it to `impersonate_chain`"
+            )
+        super().__init__(gcp_conn_id=gcp_conn_id, impersonation_chain=impersonation_chain)
         self._cached_client: JobControllerAsyncClient | None = None
 
     def get_cluster_client(self, region: str | None = None) -> ClusterControllerAsyncClient:
@@ -1101,7 +1106,7 @@ class DataprocAsyncHook(GoogleBaseHook):
         return self._cached_client
 
     def get_batch_client(self, region: str | None = None) -> BatchControllerAsyncClient:
-        """Returns BatchControllerAsyncClient"""
+        """Returns BatchControllerAsyncClient."""
         client_options = None
         if region and region != "global":
             client_options = ClientOptions(api_endpoint=f"{region}-dataproc.googleapis.com:443")
@@ -1111,7 +1116,7 @@ class DataprocAsyncHook(GoogleBaseHook):
         )
 
     def get_operations_client(self, region: str) -> OperationsClient:
-        """Returns OperationsClient"""
+        """Returns OperationsClient."""
         return self.get_template_client(region=region).transport.operations_client
 
     @GoogleBaseHook.fallback_to_default_project_id
@@ -1237,7 +1242,7 @@ class DataprocAsyncHook(GoogleBaseHook):
     ):
         """
         Gets cluster diagnostic information. After the operation completes GCS uri to
-        diagnose is returned
+        diagnose is returned.
 
         :param project_id: Required. The ID of the Google Cloud project that the cluster belongs to.
         :param region: Required. The Cloud Dataproc region in which to handle the request.
